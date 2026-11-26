@@ -1,0 +1,122 @@
+const deck = document.getElementById("deck");
+const presentationStage = document.getElementById("presentationStage");
+const slides = [...document.querySelectorAll(".slide")];
+const currentSlide = document.getElementById("currentSlide");
+const totalSlides = document.getElementById("totalSlides");
+const progressBar = document.getElementById("progressBar");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const backdropLayers = [...document.querySelectorAll(".story-image")];
+const PRESENTATION_WIDTH = 1536;
+const PRESENTATION_HEIGHT = 730;
+
+function fitPresentation() {
+  const scale = Math.min(1, innerWidth / PRESENTATION_WIDTH, innerHeight / PRESENTATION_HEIGHT);
+  presentationStage.style.setProperty("--deck-scale", String(scale));
+}
+
+fitPresentation();
+addEventListener("resize", fitPresentation, { passive: true });
+window.visualViewport?.addEventListener("resize", fitPresentation, { passive: true });
+const slideBackgrounds = [
+  "assets/scene/hero-cosmic-wheat.webp",
+  "assets/scene/roots-memory.webp",
+  "assets/scene/chapter3-composition.webp",
+  "assets/scene/conclusions-cosmic-funnel.webp"
+];
+
+let visibleBackdrop = 0;
+let currentBackdrop = "";
+let backdropRequest = 0;
+const backdropPreloads = slideBackgrounds.map(source => {
+  const image = new Image();
+  image.src = source;
+  return image;
+});
+
+function setBackdrop(index, immediate = false) {
+  if (!backdropLayers.length) return;
+  const source = slideBackgrounds[index] || slideBackgrounds[slideBackgrounds.length - 1];
+  const request = ++backdropRequest;
+  if (source === currentBackdrop) return;
+  const image = backdropPreloads[index] || backdropPreloads[backdropPreloads.length - 1];
+
+  const reveal = () => {
+    if (request !== backdropRequest) return;
+    currentBackdrop = source;
+    const nextBackdrop = immediate ? visibleBackdrop : 1 - visibleBackdrop;
+    const nextLayer = backdropLayers[nextBackdrop];
+    nextLayer.style.backgroundImage = `url("${source}")`;
+    nextLayer.classList.add("is-visible");
+    backdropLayers[1 - nextBackdrop].classList.remove("is-visible");
+    visibleBackdrop = nextBackdrop;
+  };
+
+  if (immediate) {
+    reveal();
+    return;
+  }
+
+  if (image.decode) image.decode().then(reveal, reveal);
+  else if (image.complete) reveal();
+  else image.addEventListener("load", reveal, { once: true });
+}
+
+let activeIndex = 0;
+let scrollFrame = 0;
+const pad = value => String(value).padStart(2, "0");
+
+function activate(index, scroll = false) {
+  const next = Math.max(0, Math.min(slides.length - 1, index));
+  activeIndex = next;
+  slides.forEach((slide, i) => slide.classList.toggle("is-active", i === next));
+  currentSlide.textContent = pad(next + 1);
+  progressBar.style.width = `${((next + 1) / slides.length) * 100}%`;
+  document.documentElement.dataset.slide = String(next + 1);
+  setBackdrop(next, currentBackdrop === "");
+  window.dispatchEvent(new CustomEvent("deck:slide", {
+    detail: { index: next, total: slides.length, theme: slides[next].dataset.theme || "" }
+  }));
+  if (scroll) slides[next].scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "start" });
+}
+
+function nearestSlide() {
+  const center = deck.scrollTop + deck.clientHeight / 2;
+  let found = 0;
+  let shortest = Infinity;
+  slides.forEach((slide, index) => {
+    const distance = Math.abs(slide.offsetTop + slide.offsetHeight / 2 - center);
+    if (distance < shortest) { shortest = distance; found = index; }
+  });
+  return found;
+}
+
+function move(delta) { activate(activeIndex + delta, true); }
+
+addEventListener("keydown", event => {
+  if (["ArrowRight", "ArrowDown", " ", "PageDown"].includes(event.key)) { event.preventDefault(); move(1); }
+  if (["ArrowLeft", "ArrowUp", "PageUp"].includes(event.key)) { event.preventDefault(); move(-1); }
+  if (event.key === "Home") { event.preventDefault(); activate(0, true); }
+  if (event.key === "End") { event.preventDefault(); activate(slides.length - 1, true); }
+});
+
+deck.addEventListener("scroll", () => {
+  cancelAnimationFrame(scrollFrame);
+  scrollFrame = requestAnimationFrame(() => {
+    const next = nearestSlide();
+    if (next !== activeIndex) activate(next, false);
+  });
+}, { passive: true });
+
+deck.addEventListener("click", event => {
+  if (window.getSelection()?.toString()) return;
+  const bounds = deck.getBoundingClientRect();
+  move(event.clientX - bounds.left < bounds.width * .22 ? -1 : 1);
+});
+
+totalSlides.textContent = pad(slides.length);
+const requestedSlide = Number(new URLSearchParams(location.search).get("slide"));
+if (Number.isFinite(requestedSlide) && requestedSlide > 0) {
+  activeIndex = Math.min(slides.length - 1, Math.floor(requestedSlide) - 1);
+  deck.scrollTop = slides[activeIndex].offsetTop;
+}
+activate(activeIndex, false);
